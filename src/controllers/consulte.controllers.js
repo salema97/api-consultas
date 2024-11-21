@@ -5,7 +5,7 @@ let browser;
 const initializeBrowser = async () => {
   if (!browser) {
     browser = await chromium.launch({
-      headless: true,
+      headless: false,
       args: [
         "--disable-gpu",
         "--start-maximized",
@@ -294,4 +294,239 @@ const generarJsonPredial = (dataList, numList) => {
   return {};
 };
 
-module.exports = { ConsultaAduna, ConsultaCompania, ConsultaPredial };
+const ConsultaElepco = async (req, res) => {
+  const cedula = req.body.cedula;
+  const url =
+    "http://aplicativos.elepcosa.com.ec:8080/consultaPlanilla/pages/main.jsf";
+  const TIMEOUT_MS = 30000; // Tiempo máximo de espera de 30 segundos
+
+  try {
+    await initializeBrowser(); // Asegúrate de que esta función está correctamente definida
+    const page = await browser.newPage();
+
+    // Promesa de tiempo de espera
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(async () => {
+        if (!page.isClosed()) {
+          await page.close();
+        }
+        reject(new Error("Consulta excedió el tiempo límite"));
+      }, TIMEOUT_MS);
+    });
+
+    // Promesa principal para la consulta
+    const consultaPromise = (async () => {
+      try {
+        await page.goto(url, { waitUntil: "domcontentloaded" });
+
+        // Selección y clic en la opción requerida
+        await page.waitForSelector('label[for="j_idt15:console1:0"]', {
+          timeout: 5000,
+        });
+        await page.click('label[for="j_idt15:console1:0"]');
+
+        await page.waitForTimeout(1000);
+
+        // Llenar el formulario con la cédula
+        await page.fill('input[id="j_idt15:parametro"]', cedula);
+        await page.waitForTimeout(1000);
+        await page.click("text=Buscar");
+        await page.waitForTimeout(3000);
+
+        // Buscar botones dinámicos
+        const buttons = await page.$$(
+          'button[name^="frmConsultaPlanilla:j_idt15:"][name$=":btnNuevo"]'
+        );
+
+        const allData = [];
+        if (buttons.length > 0) {
+          for (let i = 0; i < buttons.length; i++) {
+            const button = await page.$(
+              `button[name="frmConsultaPlanilla:j_idt15:${i}:btnNuevo"]`
+            );
+
+            if (button) {
+              await button.click();
+              await page.waitForTimeout(3000);
+
+              const formData = await extractFormData(page, i, true);
+              const tableData = await extractTableData(page);
+
+              allData.push({
+                form_data: formData,
+                table_data: tableData,
+              });
+            } else {
+              console.warn(`Botón ${i} no está disponible`);
+            }
+          }
+        } else {
+          const formData = await extractFormData(page, null, false);
+          const tableData = await extractTableData(page);
+
+          allData.push({
+            form_data: formData,
+            table_data: tableData,
+          });
+        }
+
+        await page.close();
+        return allData;
+      } catch (error) {
+        if (!page.isClosed()) {
+          await page.close();
+        }
+        throw error;
+      }
+    })();
+
+    // Espera el resultado de la consulta o el tiempo de espera
+    const result = await Promise.race([consultaPromise, timeoutPromise]);
+    res.json(result);
+  } catch (error) {
+    console.error("Error durante la consulta:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+async function extractFormData(page, index, hasMultiple) {
+  try {
+    if (hasMultiple) {
+      await page.waitForSelector(
+        `#frmConsultaPlanilla\\:j_idt15\\:${index}\\:j_idt16_content`,
+        { timeout: 10000 }
+      );
+
+      return {
+        Nombre: await safeTextContent(
+          page,
+          `#frmConsultaPlanilla\\:j_idt15\\:${index}\\:j_idt16_content .ui-g:nth-child(1) .value span`
+        ),
+        CedulaRUC: await safeTextContent(
+          page,
+          `#frmConsultaPlanilla\\:j_idt15\\:${index}\\:j_idt16_content .ui-g:nth-child(2) .value span`
+        ),
+        CUEN: await safeTextContent(
+          page,
+          `#frmConsultaPlanilla\\:j_idt15\\:${index}\\:j_idt16_content .ui-g:nth-child(3) .value span`
+        ),
+        Medidor: await safeTextContent(
+          page,
+          `#frmConsultaPlanilla\\:j_idt15\\:${index}\\:j_idt16_content .ui-g:nth-child(4) .value span`
+        ),
+        Direccion: await safeTextContent(
+          page,
+          `#frmConsultaPlanilla\\:j_idt15\\:${index}\\:j_idt16_content .ui-g:nth-child(5) .value span`
+        ),
+        CuentaContrato: await safeTextContent(
+          page,
+          `#frmConsultaPlanilla\\:j_idt15\\:${index}\\:j_idt16_content .ui-g:nth-child(6) .value span`
+        ),
+        ValorImpago: await safeTextContent(
+          page,
+          `#frmConsultaPlanilla\\:j_idt15\\:${index}\\:j_idt16_content .ui-g:nth-child(7) .value span`
+        ),
+        Email: await safeTextContent(
+          page,
+          `#frmConsultaPlanilla\\:j_idt15\\:${index}\\:j_idt16_content .ui-g:nth-child(8) .value span`
+        ),
+      };
+    } else {
+      await page.waitForSelector(`#frmConsultaPlanilla\\:j_idt14_content`, {
+        timeout: 10000,
+      });
+
+      return {
+        Nombre: await safeTextContent(
+          page,
+          "#frmConsultaPlanilla\\:j_idt14_content .ui-g:nth-child(1) .ui-g-11 span:first-child"
+        ),
+        CedulaRUC: await safeTextContent(
+          page,
+          "#frmConsultaPlanilla\\:j_idt14_content .ui-g:nth-child(1) .ui-g-11 span:nth-child(2)"
+        ),
+        CUEN: await safeTextContent(
+          page,
+          "#frmConsultaPlanilla\\:j_idt14_content .ui-g:nth-child(2) .ui-g-11 span:first-child"
+        ),
+        Medidor: await safeTextContent(
+          page,
+          "#frmConsultaPlanilla\\:j_idt14_content .ui-g:nth-child(2) .ui-g-11 span:nth-child(2)"
+        ),
+        CuentaContrato: await safeTextContent(
+          page,
+          "#frmConsultaPlanilla\\:j_idt14_content .ui-g:nth-child(3) .ui-g-11 span:first-child"
+        ),
+        Direccion: await safeTextContent(
+          page,
+          "#frmConsultaPlanilla\\:j_idt14_content .ui-g:nth-child(3) .ui-g-11 span:nth-child(2)"
+        ),
+        ValorImpago: await safeTextContent(
+          page,
+          "#frmConsultaPlanilla\\:j_idt14_content .ui-g:nth-child(4) .ui-g-11 span:first-child"
+        ),
+        Email: await safeTextContent(
+          page,
+          "#frmConsultaPlanilla\\:j_idt14_content .ui-g:nth-child(5) .ui-g-11 span"
+        ),
+      };
+    }
+  } catch (error) {
+    console.error("Error extrayendo datos del formulario:", error.message);
+    return {};
+  }
+}
+
+// Función para extraer datos de la tabla
+async function extractTableData(page) {
+  try {
+    const tableRows = await page.$$(
+      "#frmConsultaPlanilla\\:dtDocumentos_data tr"
+    );
+    const tableData = [];
+
+    for (const row of tableRows) {
+      const cells = await row.$$("td");
+      const rowData = [];
+      for (const cell of cells) {
+        rowData.push(await cell.textContent());
+      }
+
+      const pdfButton = await row.$('button[id*="btnPdf"]');
+      if (pdfButton) {
+        const pdfButtonId = await pdfButton.getAttribute("id");
+        rowData.push(
+          `javascript:PrimeFaces.ab({s:"${pdfButtonId}",f:"frmConsultaPlanilla",p:"frmConsultaPlanilla"});return false;`
+        );
+      }
+
+      tableData.push(rowData);
+    }
+
+    return tableData;
+  } catch (error) {
+    console.error("Error extrayendo datos de la tabla:", error.message);
+    return [];
+  }
+}
+
+// Función para obtener texto de un selector
+async function safeTextContent(page, selector) {
+  try {
+    const element = await page.$(selector);
+    return element ? (await element.textContent()).trim() : "No disponible";
+  } catch (error) {
+    console.error(
+      `Error obteniendo contenido de texto (${selector}):`,
+      error.message
+    );
+    return "No disponible";
+  }
+}
+
+module.exports = {
+  ConsultaAduna,
+  ConsultaCompania,
+  ConsultaPredial,
+  ConsultaElepco,
+};
